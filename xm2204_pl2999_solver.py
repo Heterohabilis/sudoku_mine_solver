@@ -45,7 +45,7 @@ def parse_input(ifle):
         
     variables, number_dicts = {}, {}
     for i in range(len(lines)):
-        for j in range(len(lines[0])):
+        for j in range(len(lines[i])):
             if lines[i][j] == '0':  # 0 means a variable cell
                 variables[(i, j)] = Variable(i, j)
             else:
