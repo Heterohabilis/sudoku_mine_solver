@@ -167,6 +167,12 @@ def is_consistent(assignment, number_dicts, all_variables_set):
             all_variables_set (set): Set of all variable positions (row, col).
         Returns: True if the assignment is consistent, False otherwise.
     """
+    # Global mine bound: exactly 27 mines overall (3 per row/col/block), so prune early if impossible.
+    assigned_mines = sum(assignment.values())
+    remaining_slots = len(all_variables_set) - len(assignment)
+    if assigned_mines > 27 or assigned_mines + remaining_slots < 27:
+        return False
+
     for r in range(9):
         mines_in_row = 0
         unassigned_in_row = 0
@@ -274,21 +280,136 @@ def inference(var, variables, assigned, number_dicts):
         Returns: A tuple (success, logs) where success is a boolean indicating if inference was successful, and logs is a list of tuples (row, col, value) indicating pruned values.
     """
 
-    (success_row, logs_row) = _sudo_inference(var, assigned, variables, 'row')
-    if not success_row: return False, logs_row
+    return constraint_propagation(variables, assigned, number_dicts)
 
-    (success_col, logs_col) = _sudo_inference(var, assigned, variables, 'col')
-    if not success_col: return False, logs_row + logs_col
 
-    (success_block, logs_block) = _sudo_inference(var, assigned, variables, 'block')
-    if not success_block: return False, logs_row + logs_col + logs_block
+def constraint_propagation(variables, assigned, number_dicts):
+    """
+        Stronger pruning: repeatedly enforce row/col/block totals (3 mines each) and number cell totals
+        using current assignments and domains until no domain changes.
+    """
+    logs = []
+    changed = True
 
-    (success_num, logs_num) = _num_constraint_inference(var, assigned, variables, number_dicts)
-    if not success_num:
-        return False, logs_row + logs_col + logs_block + logs_num
+    while changed:
+        changed = False
 
-    all_logs = logs_row + logs_col + logs_block + logs_num
-    return True, all_logs
+        # Row constraints
+        for r in range(9):
+            vars_in_row = [variables[(r, c)] for c in range(9) if (r, c) in variables]
+            success, new_logs, new_changed = _enforce_exact_mines(vars_in_row, 3, assigned)
+            if not success:
+                return False, logs + new_logs
+            if new_changed:
+                changed = True
+                logs.extend(new_logs)
+
+        # Column constraints
+        for c in range(9):
+            vars_in_col = [variables[(r, c)] for r in range(9) if (r, c) in variables]
+            success, new_logs, new_changed = _enforce_exact_mines(vars_in_col, 3, assigned)
+            if not success:
+                return False, logs + new_logs
+            if new_changed:
+                changed = True
+                logs.extend(new_logs)
+
+        # Block constraints
+        for br in range(3):
+            for bc in range(3):
+                vars_in_block = []
+                start_r, start_c = br * 3, bc * 3
+                for r_off in range(3):
+                    for c_off in range(3):
+                        coord = (start_r + r_off, start_c + c_off)
+                        if coord in variables:
+                            vars_in_block.append(variables[coord])
+
+                success, new_logs, new_changed = _enforce_exact_mines(vars_in_block, 3, assigned)
+                if not success:
+                    return False, logs + new_logs
+                if new_changed:
+                    changed = True
+                    logs.extend(new_logs)
+
+        # Number cell constraints
+        for (nr, nc), total in number_dicts.items():
+            nbrs = []
+            directions = [(-1, -1), (-1, 0), (-1, 1),
+                          (0,  -1),          (0,  1),
+                          (1,  -1), (1,  0), (1,  1)]
+            for dr, dc in directions:
+                pos = (nr + dr, nc + dc)
+                if pos in variables:
+                    nbrs.append(variables[pos])
+
+            success, new_logs, new_changed = _enforce_exact_mines(nbrs, total, assigned)
+            if not success:
+                return False, logs + new_logs
+            if new_changed:
+                changed = True
+                logs.extend(new_logs)
+
+    return True, logs
+
+
+def _enforce_exact_mines(var_list, target, assigned):
+    """
+        Enforce an exact-mine-count constraint on a list of variables (row/col/block/number cell).
+        Uses domain info: if max_possible == target, force remaining domains to 1; if min_possible == target, force remaining domains to 0.
+        Returns (success, logs, changed).
+    """
+    logs = []
+    changed = False
+
+    mine = 0
+    forced_ones = 0
+    potential_ones = 0
+
+    for v in var_list:
+        pos = (v.row, v.col)
+        if pos in assigned:
+            mine += assigned[pos]
+        else:
+            if v.domain == {1}:
+                forced_ones += 1
+                potential_ones += 1
+            elif 1 in v.domain:
+                potential_ones += 1
+
+    min_possible = mine + forced_ones
+    max_possible = mine + potential_ones
+
+    if min_possible > target or max_possible < target:
+        return False, logs, changed
+
+    if min_possible == target:
+        # All remaining variables must be 0 (no extra mines allowed).
+        for v in var_list:
+            pos = (v.row, v.col)
+            if pos in assigned and assigned[pos] == 1:
+                continue
+            if 1 in v.domain and len(v.domain) > 1:
+                v.domain.remove(1)
+                logs.append((v.row, v.col, 1))
+                changed = True
+                if not v.domain:
+                    return False, logs, changed
+
+    if max_possible == target:
+        # All variables that can be 1 must be 1 (prune 0).
+        for v in var_list:
+            pos = (v.row, v.col)
+            if pos in assigned and assigned[pos] == 0:
+                continue
+            if 0 in v.domain and 1 in v.domain:
+                v.domain.remove(0)
+                logs.append((v.row, v.col, 0))
+                changed = True
+                if not v.domain:
+                    return False, logs, changed
+
+    return True, logs, changed
 
 
 def _sudo_inference(var: Variable, assigned, variables, op):
@@ -437,7 +558,6 @@ def backtrack(variables, numbers, assignments, lvl):
         Returns: A complete assignment if a solution is found, None otherwise.
     """
     global total_nodes, fin_lvl
-    total_nodes += 1
 
     if is_complete(assignments, variables, numbers):
         fin_lvl = lvl
@@ -450,6 +570,8 @@ def backtrack(variables, numbers, assignments, lvl):
     for choice in DOMAIN:
         if choice in curr_var.domain:
             assignments[(curr_var.row, curr_var.col)] = choice
+            # Count a node when we test consistency of a newly assigned variable.
+            total_nodes += 1
             if is_consistent(assignments, numbers, all_vars_set):
                 inf_res, logs = inference(curr_var, variables, assignments, numbers)
                 if inf_res:
