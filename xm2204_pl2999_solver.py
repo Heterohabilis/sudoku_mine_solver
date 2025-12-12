@@ -291,6 +291,55 @@ def inference(var, variables, assigned, number_dicts):
     return True, all_logs
 
 
+def _bound_prune(mine_assigned: int, unassigned_vars: list, target: int):
+    """
+    Effect: Prunes the domains of unassigned variables based on the current number of assigned mines and the target number of mines.
+
+    mine_assigned: the number of mines already assigned in the current constraint
+    unassigned_vars: current unassigned variables involved in the constraint
+    target: the constraint target number of mines
+
+    returns: (success, logs)
+    logs: [(r, c, pruned_value), ...]
+    """
+    logs = []
+
+    # forced mines: domain == {1}
+    forced = 0
+    # possible mines: domain contains 1
+    possible = 0
+    for v in unassigned_vars:
+        if v.domain == {1}:
+            forced += 1
+        if 1 in v.domain:
+            possible += 1
+
+    min_total = mine_assigned + forced
+    max_total = mine_assigned + possible
+
+    if min_total > target or max_total < target:
+        return False, logs
+
+    if min_total == target:
+        for v in unassigned_vars:
+            if 0 in v.domain and 1 in v.domain:
+                v.domain.remove(1)
+                logs.append((v.row, v.col, 1))
+                if not v.domain:
+                    return False, logs
+
+    elif max_total == target:
+        for v in unassigned_vars:
+            if 0 in v.domain and 1 in v.domain:
+                v.domain.remove(0)
+                logs.append((v.row, v.col, 0))
+                if not v.domain:
+                    return False, logs
+
+    return True, logs
+
+
+
 def _sudo_inference(var: Variable, assigned, variables, op):
     """
         Performs Sudoku constraint inference on the given variable for a specific operation (row, col, block).
@@ -335,23 +384,10 @@ def _sudo_inference(var: Variable, assigned, variables, op):
                 elif coord in variables:
                     no_assign.append(variables[coord])
 
-    if mine == 3:
-        for i in range(len(no_assign)):
-            if 1 in no_assign[i].domain:
-                no_assign[i].domain.remove(1)
-                logs.append((no_assign[i].row, no_assign[i].col, 1))
-            if len(no_assign[i].domain) == 0:
-                return False, logs
+    success, new_logs = _bound_prune(mine, no_assign, target=3)
+    logs.extend(new_logs)
+    return success, logs
 
-    elif mine+len(no_assign) == 3:
-        for i in range(len(no_assign)):
-            if 0 in no_assign[i].domain:
-                no_assign[i].domain.remove(0)
-                logs.append((no_assign[i].row, no_assign[i].col, 0))
-            if len(no_assign[i].domain) == 0:
-                return False, logs
-
-    return True, logs
 
 
 def _num_constraint_inference(var: Variable, assigned, variables, number_dicts):
@@ -389,21 +425,11 @@ def _num_constraint_inference(var: Variable, assigned, variables, number_dicts):
                 elif neighbor_pos in variables:
                     no_assign.append(variables[neighbor_pos])
 
-            if mine == N:
-                for var_to_prune in no_assign:
-                    if 1 in var_to_prune.domain:
-                        var_to_prune.domain.remove(1)
-                        logs.append((var_to_prune.row, var_to_prune.col, 1))
-                        if not var_to_prune.domain:
-                            return False, logs
+            success, new_logs = _bound_prune(mine, no_assign, target=N)
+            logs.extend(new_logs)
+            if not success:
+                return False, logs
 
-            elif mine + len(no_assign) == N:
-                for var_to_prune in no_assign:
-                    if 0 in var_to_prune.domain:
-                        var_to_prune.domain.remove(0)
-                        logs.append((var_to_prune.row, var_to_prune.col, 0))
-                        if not var_to_prune.domain:
-                            return False, logs
 
     return True, logs
 
@@ -437,11 +463,12 @@ def backtrack(variables, numbers, assignments, lvl):
         Returns: A complete assignment if a solution is found, None otherwise.
     """
     global total_nodes, fin_lvl
-    total_nodes += 1
 
     if is_complete(assignments, variables, numbers):
         fin_lvl = lvl
         return assignments
+
+    total_nodes += 1
 
     curr_var = select_unassigned_var(assignments, variables)
 
