@@ -464,8 +464,6 @@ def backtrack(variables, numbers, assignments, lvl):
     """
     global total_nodes, fin_lvl
 
-    total_nodes += 1
-
     if is_complete(assignments, variables, numbers):
         fin_lvl = lvl
         return assignments
@@ -479,6 +477,7 @@ def backtrack(variables, numbers, assignments, lvl):
         if choice in curr_var.domain:
             assignments[(curr_var.row, curr_var.col)] = choice
             if is_consistent(assignments, numbers, all_vars_set):
+                total_nodes += 1
                 inf_res, logs = inference(curr_var, variables, assignments, numbers)
                 if inf_res:
                     recur = backtrack(variables, numbers, assignments, lvl + 1)
