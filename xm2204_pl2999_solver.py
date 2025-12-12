@@ -464,11 +464,12 @@ def backtrack(variables, numbers, assignments, lvl):
     """
     global total_nodes, fin_lvl
 
+    total_nodes += 1
+
     if is_complete(assignments, variables, numbers):
         fin_lvl = lvl
         return assignments
 
-    total_nodes += 1
 
     curr_var = select_unassigned_var(assignments, variables)
 
